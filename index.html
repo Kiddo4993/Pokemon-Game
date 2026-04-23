@@ -1,0 +1,738 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PokéBattle Arena</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="script.js"></script>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+    const TG = window.TYPE_GRADIENTS;
+    const TC = window.TYPE_COLORS;
+    const SPRITE = id => `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${id}.png`;
+    const BACK   = id => `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/back/${id}.png`;
+
+    function hpColorClass(hp, maxHp) {
+      const p = hp / maxHp;
+      return p > 0.5 ? 'hp-green' : p > 0.2 ? 'hp-yellow' : 'hp-red';
+    }
+
+    // ── APP ─────────────────────────────────────────────────────
+    function App() {
+      const [, setTick] = useState(0);
+      useEffect(() => {
+        window.__rerender = () => setTick(t => t + 1);
+        window.__rerender();
+        return () => { window.__rerender = () => {}; };
+      }, []);
+
+      const G = window.GAME_STATE;
+      if (!G || !G.roster) return null;
+      const { ui, battle, trainer, roster, log } = G;
+
+      return (
+        <>
+          <Header trainer={trainer} />
+          <main id="main-layout">
+            <RosterPanel roster={roster} ui={ui} battle={battle} />
+            <BattleColumn battle={battle} ui={ui} roster={roster} />
+            <LogPanel log={log} ui={ui} trainer={trainer} />
+          </main>
+
+          {ui.modal === 'shop'    && <ShopModal trainer={trainer} />}
+          {ui.modal === 'bag'     && <BagModal  battle={battle} trainer={trainer} />}
+          {ui.modal === 'switch'  && <SwitchModal battle={battle} roster={roster} />}
+          {ui.modal === 'roster'  && <RosterModal roster={roster} />}
+          {ui.modal === 'confirm' && <ConfirmModal roster={roster} id={ui.pendingConfirmId} />}
+
+          {ui.toast             && <Toast msg={ui.toast} />}
+          {ui.healingOverlay    && <HealingOverlay />}
+          {ui.catchOverlay.show && <CatchOverlay overlay={ui.catchOverlay} />}
+        </>
+      );
+    }
+
+    // ── HEADER ──────────────────────────────────────────────────
+    function Header({ trainer }) {
+      const diffLabels = ['Easy', 'Normal', 'Hard'];
+      return (
+        <header id="main-header">
+          <div className="header-left">
+            <h1 className="game-title">PokéBattle Arena</h1>
+          </div>
+          <div className="header-right">
+            <div className="stat-chip">💰 {trainer.money}</div>
+            <div className="stat-chip">🏆 {trainer.wins}-{trainer.losses}</div>
+            <div className="stat-chip">⭐ {trainer.rank}</div>
+            <div className="stat-chip">🔵 {trainer.pokeBalls}</div>
+            <div className="stat-chip">🧪 {trainer.potions}</div>
+            <div className="stat-chip">💊 {trainer.superPotions}</div>
+            <div className="stat-chip">♻️ {trainer.revives}</div>
+            <div className="difficulty-wrap">
+              <span className="diff-label">AI</span>
+              <select
+                className="diff-select"
+                value={trainer.difficulty ?? 1}
+                onChange={e => setDifficulty(e.target.value)}
+              >
+                <option value={0}>Easy</option>
+                <option value={1}>Normal</option>
+                <option value={2}>Hard</option>
+              </select>
+            </div>
+          </div>
+        </header>
+      );
+    }
+
+    // ── ROSTER PANEL ────────────────────────────────────────────
+    function RosterPanel({ roster, ui, battle }) {
+      const filtered = roster.filter(p =>
+        p.name.toLowerCase().includes((ui.searchQuery || '').toLowerCase())
+      );
+      return (
+        <aside id="roster-panel" className="game-panel">
+          <h2 className="panel-heading">Your Team</h2>
+          <div className="roster-toolbar">
+            <button className="tool-btn" onClick={() => { window.GAME_STATE.ui.modal='roster'; window.__rerender(); }}>📋 Roster</button>
+            <button className="tool-btn" onClick={globalTrain}>💪 Train</button>
+            <button className="tool-btn" onClick={healingStation}>❤️ Heal</button>
+            <button className="tool-btn" onClick={openShop}>🛒 Shop</button>
+            <button className="tool-btn" onClick={save}>💾 Save</button>
+            <button className="tool-btn" onClick={load}>📂 Load</button>
+          </div>
+          <div className="roster-search-row">
+            <input
+              type="text"
+              placeholder="Search Pokémon…"
+              value={ui.searchQuery || ''}
+              onChange={e => { window.GAME_STATE.ui.searchQuery = e.target.value; window.__rerender(); }}
+            />
+            <button className="send-btn" onClick={sendToBattle}>⚔️ Battle!</button>
+          </div>
+          <div id="roster-grid">
+            {filtered.length === 0
+              ? <div className="empty-msg">No Pokémon found</div>
+              : filtered.map(p => (
+                  <PokemonCard key={p.id} poke={p} isActive={battle?.playerPoke?.id === p.id} />
+                ))
+            }
+          </div>
+        </aside>
+      );
+    }
+
+    // ── POKÉMON CARD ────────────────────────────────────────────
+    function PokemonCard({ poke, isActive }) {
+      const hpPct  = Math.max(0, Math.round((poke.hp / poke.maxHp) * 100));
+      const xpPct  = Math.min(100, Math.round((poke.xp / poke.xpToNext) * 100));
+      const colCls = hpColorClass(poke.hp, poke.maxHp);
+      const grad   = TG[poke.type] || TG.Normal;
+      const SL     = window.STATUS_LABELS;
+      const SC     = window.STATUS_COLORS;
+      return (
+        <div
+          className={`poke-card${poke.fainted?' fainted':''}${isActive?' active-poke':''}`}
+          data-type={poke.type}
+        >
+          <div className="card-sprite-wrap">
+            <img className="card-sprite" src={SPRITE(poke.spriteId)} alt={poke.name} />
+          </div>
+          <div className="card-name">{poke.name}</div>
+          <div className="card-level-row">
+            <span className="card-level">Lv.{poke.level}</span>
+            {poke.status && (
+              <span className="status-badge" style={{ background: SC[poke.status] }}>
+                {SL[poke.status]}
+              </span>
+            )}
+          </div>
+          <span className="type-badge" style={{ background: grad }}>{poke.type}</span>
+          <div className="card-hp-wrap">
+            <div className="card-hp-track">
+              <div className={`card-hp-fill ${colCls}`} style={{ width:`${hpPct}%` }} />
+            </div>
+          </div>
+          <div className="card-xp-wrap">
+            <div className="card-xp-track">
+              <div className="card-xp-fill" style={{ width:`${xpPct}%` }} />
+            </div>
+          </div>
+          <div className="card-stats">
+            <span className="stat-pill">⚔️{poke.attack}</span>
+            <span className="stat-pill">🛡{poke.defense}</span>
+            <span className="stat-pill">💨{poke.speed}</span>
+          </div>
+          {poke.fainted && (
+            <div className="fainted-overlay">
+              <span className="fainted-label">FAINTED</span>
+            </div>
+          )}
+          <button className="release-btn" onClick={() => confirmRelease(poke.id)} title={`Release ${poke.name}`}>✕</button>
+        </div>
+      );
+    }
+
+    // ── BATTLE COLUMN ────────────────────────────────────────────
+    function BattleColumn({ battle, ui, roster }) {
+      const hasBattle = !!(battle && battle.active);
+      return (
+        <section id="battle-arena-column">
+          <BattleArena battle={battle} ui={ui} />
+          {hasBattle && <BattleTwistBar battle={battle} />}
+          <BattleControls battle={battle} ui={ui} roster={roster} hasBattle={hasBattle} />
+          <BattleLogBox logLines={ui.logLines} />
+        </section>
+      );
+    }
+
+    // ── BATTLE ARENA ────────────────────────────────────────────
+    function BattleArena({ battle, ui }) {
+      const opp = battle?.opponentPoke;
+      const pl  = battle?.playerPoke;
+      const oppHpPct = opp ? Math.max(0, Math.round((opp.hp / opp.maxHp) * 100)) : 100;
+      const plHpPct  = pl  ? Math.max(0, Math.round((pl.hp  / pl.maxHp)  * 100)) : 100;
+      const plXpPct  = pl  ? Math.min(100, Math.round((pl.xp / pl.xpToNext) * 100)) : 0;
+      const terrain  = battle?.terrain || 'Neutral';
+      const SL = window.STATUS_LABELS;
+      const SC = window.STATUS_COLORS;
+
+      return (
+        <div id="battle-arena" className="game-panel" style={{ padding:0 }}>
+          <div className={`arena-bg terrain-${terrain.toLowerCase()}`}>
+
+            {/* Opponent (top-right) */}
+            <div className="battle-combatant opponent-side">
+              {opp && (
+                <div className="hp-box" id="opp-hpbox">
+                  <div className="hp-box-inner">
+                    <span className="poke-name" id="opp-name">{opp.name}</span>
+                    <div className="name-badges">
+                      <span className="poke-level" id="opp-level">Lv.{opp.level}</span>
+                      {opp.status && (
+                        <span className="status-badge" style={{ background: SC[opp.status] }}>
+                          {SL[opp.status]}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="hp-bar-wrap">
+                    <span className="hp-label">HP</span>
+                    <div className="hp-bar-track">
+                      <div className={`hp-bar-fill ${hpColorClass(opp.hp, opp.maxHp)}`}
+                           id="opp-hp-fill" style={{ width:`${oppHpPct}%` }} />
+                    </div>
+                    <span className="hp-text" id="opp-hp-text">{Math.max(0,opp.hp)}/{opp.maxHp}</span>
+                  </div>
+                  {battle && <StageIndicator stages={battle.oppStages} />}
+                </div>
+              )}
+              <div className="sprite-platform opponent-platform">
+                <div className="platform-ellipse" />
+                {opp
+                  ? <img id="opp-sprite" className="battle-sprite opponent-sprite" src={SPRITE(opp.spriteId)} alt={opp.name} />
+                  : <img id="opp-sprite" className="battle-sprite opponent-sprite" src="" alt="Opponent" style={{ opacity:0 }} />
+                }
+              </div>
+            </div>
+
+            {/* Player (bottom-left) */}
+            <div className="battle-combatant player-side">
+              <div className="sprite-platform player-platform">
+                <div className="platform-ellipse" />
+                {pl
+                  ? <img id="player-sprite" className="battle-sprite player-sprite" src={BACK(pl.spriteId)} alt={pl.name} />
+                  : <img id="player-sprite" className="battle-sprite player-sprite" src="" alt="Player" style={{ opacity:0 }} />
+                }
+              </div>
+              {pl && (
+                <div className="hp-box" id="player-hpbox">
+                  <div className="hp-box-inner">
+                    <span className="poke-name" id="player-name">{pl.name}</span>
+                    <div className="name-badges">
+                      <span className="poke-level" id="player-level">Lv.{pl.level}</span>
+                      {pl.status && (
+                        <span className="status-badge" style={{ background: SC[pl.status] }}>
+                          {SL[pl.status]}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="hp-bar-wrap">
+                    <span className="hp-label">HP</span>
+                    <div className="hp-bar-track">
+                      <div className={`hp-bar-fill ${hpColorClass(pl.hp, pl.maxHp)}`}
+                           id="player-hp-fill" style={{ width:`${plHpPct}%` }} />
+                    </div>
+                    <span className="hp-text" id="player-hp-text">{Math.max(0,pl.hp)}/{pl.maxHp}</span>
+                  </div>
+                  <div className="xp-bar-wrap">
+                    <div className="xp-bar-track">
+                      <div className="xp-bar-fill" id="player-xp-fill" style={{ width:`${plXpPct}%` }} />
+                    </div>
+                  </div>
+                  {battle && <StageIndicator stages={battle.playerStages} />}
+                </div>
+              )}
+            </div>
+          </div>{/* .arena-bg */}
+
+          {ui.wildBannerText && (
+            <div className={`wild-banner${ui.wildBannerVisible?' slide-in':''}`}>
+              A wild {ui.wildBannerText} appeared!
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ── STAGE INDICATOR ─────────────────────────────────────────
+    function StageIndicator({ stages }) {
+      if (!stages) return null;
+      const active = Object.entries(stages).filter(([, v]) => v !== 0);
+      if (!active.length) return null;
+      const labels = { atk:'ATK', def:'DEF', spa:'SpA', spd:'SpD', spe:'SPD', acc:'ACC', eva:'EVA' };
+      return (
+        <div className="stage-row">
+          {active.map(([stat, val]) => (
+            <span key={stat} className={`stage-chip ${val > 0 ? 'stage-up' : 'stage-down'}`}>
+              {labels[stat]}{val > 0 ? `+${val}` : val}
+            </span>
+          ))}
+        </div>
+      );
+    }
+
+    // ── TWIST BAR (Terrain + Momentum + Combo) ──────────────────
+    function BattleTwistBar({ battle }) {
+      if (!battle) return null;
+      const TI       = window.TERRAIN_INFO || {};
+      const terrain  = battle.terrain || 'Neutral';
+      const info     = TI[terrain] || {};
+      const turnsLeft = 3 - ((battle.terrainTurns || 0) % 3);
+      const momentum = battle.momentum ?? 50;
+      const combo    = battle.combo || {};
+      const synergyReady = combo.synergyReady;
+
+      return (
+        <div id="twist-bar">
+
+          {/* Terrain */}
+          <div className={`terrain-block terrain-${terrain.toLowerCase()}-block`}>
+            <div className="terrain-top">
+              <span className="terrain-emoji">{info.emoji}</span>
+              <span className="terrain-name">{terrain}</span>
+              <div className="terrain-countdown">
+                {[1,2,3].map(i => (
+                  <div key={i} className={`terrain-pip${i <= turnsLeft ? ' pip-active' : ''}`} />
+                ))}
+              </div>
+            </div>
+            <div className="terrain-desc">{info.desc}</div>
+          </div>
+
+          {/* Momentum meter */}
+          <div className="momentum-block">
+            <div className="momentum-label">
+              {battle.playerSurge
+                ? <span className="surge-text player-surge-text">⚡ SURGE</span>
+                : battle.oppSurge
+                  ? <span className="surge-text opp-surge-text">💢 SURGE</span>
+                  : <span>Momentum</span>
+              }
+            </div>
+            <div className="momentum-track">
+              <div className="momentum-fill-player"  style={{ width:`${Math.max(0, momentum-50)*2}%` }} />
+              <div className="momentum-fill-opp" style={{ width:`${Math.max(0, 50-momentum)*2}%` }} />
+              <div className="momentum-center" />
+            </div>
+            <div className="momentum-ends">
+              <span className="mom-label-you">YOU</span>
+              <span className="mom-label-opp">OPP</span>
+            </div>
+          </div>
+
+          {/* Combo meter */}
+          <div className={`combo-block${synergyReady ? ' synergy-ready' : ''}`}>
+            <div className="combo-label">
+              {synergyReady
+                ? <span className="synergy-text">🌟 SYNERGY!</span>
+                : <span>Combo Chain</span>
+              }
+            </div>
+            <div className="combo-pips">
+              {[0,1,2].map(i => (
+                <div key={i} className={`combo-pip${i < (combo.meter||0) ? ' pip-filled' : ''}${synergyReady ? ' pip-synergy' : ''}`} />
+              ))}
+            </div>
+            {combo.chain && combo.chain.length > 0 && (
+              <div className="combo-chain">
+                {combo.chain.map((t, i) => (
+                  <span key={i} className="chain-type" style={{ background: TG[t] || TG.Normal }}>
+                    {t}
+                  </span>
+                ))}
+              </div>
+            )}
+            {(combo.bonusDamage > 0) && (
+              <div className="combo-pending">+{combo.bonusDamage} bonus dmg ready</div>
+            )}
+            {combo.piercePending && (
+              <div className="combo-pending">Pierce active next hit</div>
+            )}
+          </div>
+
+        </div>
+      );
+    }
+
+    // ── BATTLE CONTROLS ─────────────────────────────────────────
+    function BattleControls({ battle, ui, hasBattle }) {
+      const waiting = battle?.waitingForInput;
+      const pl      = battle?.playerPoke;
+      const synergy = battle?.combo?.synergyReady;
+
+      return (
+        <div id="battle-controls">
+          {!ui.movePanel
+            ? (
+              <div id="action-panel">
+                <button className="action-btn" disabled={!waiting} onClick={openFight}>⚔️ Fight</button>
+                <button className="action-btn" disabled={!waiting} onClick={openBag}>🎒 Bag</button>
+                <button className="action-btn" disabled={!waiting} onClick={openSwitchModal}>🔄 Switch</button>
+                <button className="action-btn" disabled={!waiting} onClick={attemptRun}>🏃 Run</button>
+              </div>
+            ) : (
+              <div id="move-panel">
+                {pl && pl.moves.map((m, i) => (
+                  <MoveButton
+                    key={i} move={m} index={i} waiting={waiting}
+                    player={pl} opponent={battle?.opponentPoke}
+                    synergyReady={synergy}
+                  />
+                ))}
+                {pl && pl.moves.length < 4 && Array.from({ length: 4 - pl.moves.length }).map((_, i) => (
+                  <div key={`empty-${i}`} />
+                ))}
+                <button className="move-back-btn" onClick={closeFight}>← Back</button>
+              </div>
+            )
+          }
+          {!hasBattle && (
+            <button className="encounter-btn" onClick={startRandomEncounter}>
+              ⚡ Random Encounter
+            </button>
+          )}
+        </div>
+      );
+    }
+
+    // ── MOVE BUTTON ─────────────────────────────────────────────
+    function MoveButton({ move, index, waiting, player, opponent, synergyReady }) {
+      const [hovered, setHovered] = useState(false);
+      const grad   = TG[move.type] || TG.Normal;
+      const ppLow  = move.pp <= Math.floor(move.maxPp / 4);
+      const ppZero = move.pp <= 0;
+
+      // Pre-move effectiveness preview
+      let effectiveness = null;
+      let effLabel = '';
+      if (opponent && move.category !== 'status') {
+        const mult = window.GAME_STATE && (function() {
+          const tc = {
+            Normal:{Rock:0.5,Ghost:0,Steel:0.5}, Fire:{Fire:0.5,Water:0.5,Grass:2,Ice:2,Bug:2,Rock:0.5,Dragon:0.5,Steel:2},
+            Water:{Fire:2,Water:0.5,Grass:0.5,Ground:2,Rock:2,Dragon:0.5}, Electric:{Water:2,Electric:0.5,Grass:0.5,Ground:0,Flying:2,Dragon:0.5},
+            Grass:{Fire:0.5,Water:2,Grass:0.5,Poison:0.5,Ground:2,Flying:0.5,Bug:0.5,Rock:2,Dragon:0.5,Steel:0.5},
+            Ice:{Fire:0.5,Water:0.5,Grass:2,Ice:0.5,Ground:2,Flying:2,Dragon:2,Steel:0.5},
+            Fighting:{Normal:2,Ice:2,Poison:0.5,Flying:0.5,Psychic:0.5,Bug:0.5,Rock:2,Ghost:0,Dark:2,Steel:2,Fairy:0.5},
+            Poison:{Grass:2,Poison:0.5,Ground:0.5,Rock:0.5,Ghost:0.5,Steel:0,Fairy:2},
+            Ground:{Fire:2,Electric:2,Grass:0.5,Poison:2,Flying:0,Bug:0.5,Rock:2,Steel:2},
+            Flying:{Electric:0.5,Grass:2,Fighting:2,Bug:2,Rock:0.5,Steel:0.5},
+            Psychic:{Fighting:2,Poison:2,Psychic:0.5,Dark:0,Steel:0.5},
+            Bug:{Fire:0.5,Grass:2,Fighting:0.5,Flying:0.5,Psychic:2,Ghost:0.5,Dark:2,Steel:0.5,Fairy:0.5},
+            Rock:{Fire:2,Ice:2,Fighting:0.5,Ground:0.5,Flying:2,Bug:2,Steel:0.5},
+            Ghost:{Normal:0,Psychic:2,Ghost:2,Dark:0.5}, Dragon:{Dragon:2,Steel:0.5,Fairy:0},
+            Dark:{Fighting:0.5,Psychic:2,Ghost:2,Dark:0.5,Fairy:0.5},
+            Steel:{Fire:0.5,Water:0.5,Electric:0.5,Ice:2,Rock:2,Steel:0.5,Fairy:2},
+            Fairy:{Fire:0.5,Fighting:2,Poison:0.5,Dragon:2,Dark:2,Steel:0.5},
+          };
+          if (!tc[move.type]) return 1;
+          const m = tc[move.type][opponent.type];
+          return m !== undefined ? m : 1;
+        })();
+        effectiveness = mult;
+        if      (mult >= 2)  effLabel = '⚡ Super!';
+        else if (mult === 0) effLabel = '✗ No effect';
+        else if (mult < 1)   effLabel = '↓ Weak';
+        else if (move.type === player?.type) effLabel = '★ STAB';
+      }
+
+      return (
+        <div className="move-btn-wrap" onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
+          <button
+            className={`move-btn${synergyReady ? ' synergy-glow' : ''}`}
+            style={{ background: grad }}
+            disabled={!waiting || ppZero}
+            onClick={() => playerAttack(index)}
+          >
+            <span className="move-name">{move.name}</span>
+            <div className="move-meta">
+              <span className="move-type-label">{move.type}</span>
+              {move.category !== 'status' && (
+                <span className="move-power">{move.power}pw</span>
+              )}
+              <span className="move-pp" style={{ color: ppLow ? '#fca5a5' : undefined }}>
+                PP {move.pp}/{move.maxPp}
+              </span>
+              {effectiveness !== null && effLabel && (
+                <span className={`eff-badge${effectiveness >= 2 ? ' eff-super' : effectiveness === 0 ? ' eff-none' : effectiveness < 1 ? ' eff-weak' : ' eff-stab'}`}>
+                  {effLabel}
+                </span>
+              )}
+            </div>
+          </button>
+          {hovered && (
+            <div className="move-tooltip">
+              <div className="tt-name">{move.name}</div>
+              <div className="tt-row">
+                <span className="tt-type" style={{ background: TG[move.type]||TG.Normal }}>{move.type}</span>
+                <span className="tt-cat">{move.category}</span>
+              </div>
+              {move.category !== 'status' && (
+                <div className="tt-stats">
+                  <span>Power: <b>{move.power}</b></span>
+                  <span>Acc: <b>{move.accuracy}%</b></span>
+                </div>
+              )}
+              <div className="tt-pp">PP: {move.pp}/{move.maxPp}</div>
+              {move.desc && <div className="tt-desc">{move.desc}</div>}
+              {move.statusEffect && !move.desc && (
+                <div className="tt-desc">
+                  {move.statusEffect.chance === 100
+                    ? `Inflicts ${move.statusEffect.status}.`
+                    : `${move.statusEffect.chance}% chance to inflict ${move.statusEffect.status}.`}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ── BATTLE LOG BOX ──────────────────────────────────────────
+    function BattleLogBox({ logLines }) {
+      return (
+        <div id="battle-log-box">
+          {logLines.map((l, i) => (
+            <div key={i} className={`log-line${l.cssClass ? ' ' + l.cssClass : ''}`}>{l.msg}</div>
+          ))}
+          <span className="blink-cursor">▌</span>
+        </div>
+      );
+    }
+
+    // ── LOG PANEL ────────────────────────────────────────────────
+    function LogPanel({ log, ui, trainer }) {
+      return (
+        <aside id="log-panel" className="game-panel">
+          <h2 className="panel-heading">Battle Log</h2>
+          <div id="session-stats">
+            <div className="session-stat"><span className="ss-label">Battles</span><span className="ss-val">{ui.sessionBattles}</span></div>
+            <div className="session-stat"><span className="ss-label">Wins</span><span className="ss-val">{trainer.wins}</span></div>
+            <div className="session-stat"><span className="ss-label">Losses</span><span className="ss-val">{trainer.losses}</span></div>
+            <div className="session-stat"><span className="ss-label">Caught</span><span className="ss-val">{ui.sessionCaught}</span></div>
+          </div>
+          <div id="full-log">
+            {log.map((e, i) => (
+              <div key={i} className={`log-entry${e.cssClass ? ' ' + e.cssClass : ''}`}>{e.msg}</div>
+            ))}
+          </div>
+        </aside>
+      );
+    }
+
+    // ── SHOP MODAL ───────────────────────────────────────────────
+    function ShopModal({ trainer }) {
+      const can = price => trainer.money >= price;
+      return (
+        <div className="modal-overlay" onClick={e => e.target.classList.contains('modal-overlay') && closeModal()}>
+          <div className="modal-box">
+            <h2 className="modal-title">🛒 Poké Mart</h2>
+            <p className="modal-sub">Buy items with your hard-earned coins!</p>
+            <div className="shop-grid">
+              <ShopItem emoji="🔵" name="Poké Ball"   desc="Catch wild Pokémon" price={50}  canAfford={can(50)}  onBuy={() => buyItem('pokeBalls',50)} />
+              <ShopItem emoji="🧪" name="Potion"       desc="+50 HP"            price={100} canAfford={can(100)} onBuy={() => buyItem('potions',100)} />
+              <ShopItem emoji="💊" name="Super Potion" desc="Full HP restore"   price={300} canAfford={can(300)} onBuy={() => buyItem('superPotions',300)} />
+              <ShopItem emoji="♻️" name="Revive"       desc="Revive at half HP" price={500} canAfford={can(500)} onBuy={() => buyItem('revives',500)} />
+            </div>
+            <button className="close-btn" onClick={closeModal}>✕ Close</button>
+          </div>
+        </div>
+      );
+    }
+    function ShopItem({ emoji, name, desc, price, canAfford, onBuy }) {
+      return (
+        <div className="shop-item">
+          <span className="shop-emoji">{emoji}</span>
+          <span className="shop-name">{name}</span>
+          <span className="shop-desc">{desc}</span>
+          <span className="shop-price">{price} 💰</span>
+          <button className="cta-btn" disabled={!canAfford} onClick={onBuy} style={{ fontSize:'6px', padding:'6px 10px' }}>Buy</button>
+        </div>
+      );
+    }
+
+    // ── BAG MODAL ────────────────────────────────────────────────
+    function BagModal({ battle, trainer }) {
+      const isWild = battle?.isWild;
+      const items = [
+        { emoji:'🧪', name:'Potion',       desc:'+50 HP',     count:trainer.potions,      key:'potion'      },
+        { emoji:'💊', name:'Super Potion', desc:'Full heal',  count:trainer.superPotions, key:'superPotion' },
+        { emoji:'♻️', name:'Revive',        desc:'Revive ½HP', count:trainer.revives,      key:'revive'      },
+        ...(isWild ? [{ emoji:'🔵', name:'Poké Ball', desc:'Catch!', count:trainer.pokeBalls, key:'pokeball' }] : []),
+      ];
+      return (
+        <div className="modal-overlay" onClick={e => e.target.classList.contains('modal-overlay') && closeModal()}>
+          <div className="modal-box">
+            <h2 className="modal-title">🎒 Bag</h2>
+            <p className="modal-sub">{isWild ? 'Use an item or throw a Poké Ball!' : 'Use an item on your active Pokémon.'}</p>
+            <div className="bag-grid">
+              {items.map(it => (
+                <div className="bag-item" key={it.key}>
+                  <span className="bag-emoji">{it.emoji}</span>
+                  <span className="bag-name">{it.name}</span>
+                  <span className="bag-count">×{it.count}</span>
+                  <span className="bag-desc">{it.desc}</span>
+                  <button className="cta-btn" disabled={it.count <= 0} onClick={() => useItem(it.key)} style={{ fontSize:'6px', padding:'6px 10px' }}>Use</button>
+                </div>
+              ))}
+            </div>
+            <button className="close-btn" onClick={closeModal}>✕ Close</button>
+          </div>
+        </div>
+      );
+    }
+
+    // ── SWITCH MODAL ─────────────────────────────────────────────
+    function SwitchModal({ battle, roster }) {
+      const activePl = battle?.playerPoke;
+      return (
+        <div className="modal-overlay" onClick={e => e.target.classList.contains('modal-overlay') && closeModal()}>
+          <div className="modal-box wide">
+            <h2 className="modal-title">🔄 Switch Pokémon</h2>
+            <div className="switch-grid">
+              {roster.map(p => {
+                const isActive = activePl && p.id === activePl.id;
+                const disabled = p.fainted || isActive;
+                const hpPct    = Math.max(0, Math.round((p.hp / p.maxHp) * 100));
+                const SC = window.STATUS_COLORS;
+                const SL = window.STATUS_LABELS;
+                return (
+                  <div key={p.id} className={`switch-card${disabled?' disabled':''}${isActive?' active-poke':''}`}
+                       onClick={() => !disabled && doSwitch(p.id)}>
+                    <img className="switch-sprite" src={SPRITE(p.spriteId)} alt={p.name} />
+                    <div className="switch-name">{p.name}</div>
+                    <div className="switch-lvl">Lv.{p.level} · {p.type}</div>
+                    <div className="switch-hp">
+                      {p.fainted ? '💀 Fainted' : isActive ? '⚔️ Active' : `HP ${hpPct}%`}
+                    </div>
+                    {p.status && (
+                      <span className="status-badge" style={{ background: SC[p.status] }}>{SL[p.status]}</span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <button className="close-btn" onClick={closeModal}>✕ Cancel</button>
+          </div>
+        </div>
+      );
+    }
+
+    // ── ROSTER MODAL ─────────────────────────────────────────────
+    function RosterModal({ roster }) {
+      return (
+        <div className="modal-overlay" onClick={e => e.target.classList.contains('modal-overlay') && closeModal()}>
+          <div className="modal-box wide">
+            <h2 className="modal-title">📋 Full Roster</h2>
+            <div className="switch-grid">
+              {roster.map(p => {
+                const SC = window.STATUS_COLORS, SL = window.STATUS_LABELS;
+                return (
+                  <div key={p.id} className={`switch-card${p.fainted?' disabled':''}`}>
+                    <img className="switch-sprite" src={SPRITE(p.spriteId)} alt={p.name} />
+                    <div className="switch-name">{p.name}</div>
+                    <div className="switch-lvl">Lv.{p.level} · {p.type}</div>
+                    <div className="switch-hp" style={{ fontSize:'9px', color:'var(--text-dim)' }}>
+                      {p.fainted ? '💀 Fainted' : `HP ${p.hp}/${p.maxHp}`}
+                    </div>
+                    {p.status && <span className="status-badge" style={{ background: SC[p.status] }}>{SL[p.status]}</span>}
+                    <div style={{ fontFamily:'var(--font-pixel)', fontSize:'5px', color:'var(--text-muted)', marginTop:'2px' }}>
+                      ATK:{p.attack} DEF:{p.defense} SPD:{p.speed}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <button className="close-btn" onClick={closeModal}>✕ Close</button>
+          </div>
+        </div>
+      );
+    }
+
+    // ── CONFIRM MODAL ────────────────────────────────────────────
+    function ConfirmModal({ roster, id }) {
+      const poke = roster.find(p => p.id === id);
+      if (!poke) return null;
+      return (
+        <div className="modal-overlay" onClick={e => e.target.classList.contains('modal-overlay') && closeModal()}>
+          <div className="modal-box small">
+            <h2 className="modal-title" style={{ fontSize:'9px' }}>Release {poke.name}?</h2>
+            <p className="modal-sub" style={{ fontSize:'11px', marginTop:'8px' }}>Are you sure? This cannot be undone.</p>
+            <div className="confirm-btns">
+              <button className="cta-btn danger" onClick={doRelease}>Yes, Release</button>
+              <button className="cta-btn ghost"  onClick={closeModal}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ── OVERLAYS ────────────────────────────────────────────────
+    function Toast({ msg }) {
+      return <div className="toast">{msg}</div>;
+    }
+    function HealingOverlay() {
+      return (
+        <div className="healing-overlay">
+          <div className="healing-heart">❤️</div>
+          <p className="healing-text">Healing…</p>
+        </div>
+      );
+    }
+    function CatchOverlay({ overlay }) {
+      return (
+        <div className="catch-overlay">
+          <div className={`catch-ball${overlay.wiggle?' wiggle':''}`}>🔵</div>
+          {overlay.text && <p className="catch-result-text">{overlay.text}</p>}
+        </div>
+      );
+    }
+
+    // ── MOUNT ───────────────────────────────────────────────────
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
