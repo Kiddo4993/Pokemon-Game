@@ -267,6 +267,31 @@ const MOVES = {
   Agility:      { name:'Agility',       type:'Psychic',  category:'status',   power:0,   accuracy:100, pp:30, maxPp:30,
                   stageEffect:{ target:'self', stat:'spe', stages:2 },
                   desc:'Sharply raises Speed by 2 stages.' },
+  SunnyDay:     { name:'Sunny Day',     type:'Fire',     category:'status',   power:0,   accuracy:100, pp:5,  maxPp:5,
+                  weatherSet:'Sunny',     desc:'Turns the sunlight harsh for 5 turns.' },
+  RainDance:    { name:'Rain Dance',    type:'Water',    category:'status',   power:0,   accuracy:100, pp:5,  maxPp:5,
+                  weatherSet:'Rain',      desc:'Makes it rain for 5 turns.' },
+  Sandstorm:    { name:'Sandstorm',     type:'Rock',     category:'status',   power:0,   accuracy:100, pp:10, maxPp:10,
+                  weatherSet:'Sandstorm', desc:'Kicks up a sandstorm for 5 turns.' },
+  Hail:         { name:'Hail',          type:'Ice',      category:'status',   power:0,   accuracy:100, pp:10, maxPp:10,
+                  weatherSet:'Hail',      desc:'Summons a hailstorm for 5 turns.' },
+  Blizzard:     { name:'Blizzard',      type:'Ice',      category:'special',  power:110, accuracy:70,  pp:5,  maxPp:5,
+                  statusEffect:{ target:'opp', status:'freeze', chance:10 },
+                  desc:'A vicious snowstorm. May freeze.' },
+  WillOWisp:    { name:'Will-O-Wisp',   type:'Fire',     category:'status',   power:0,   accuracy:85,  pp:15, maxPp:15,
+                  statusEffect:{ target:'opp', status:'burn', chance:100 },
+                  desc:'Burns the target with spectral flame.' },
+  Toxic:        { name:'Toxic',         type:'Poison',   category:'status',   power:0,   accuracy:90,  pp:10, maxPp:10,
+                  statusEffect:{ target:'opp', status:'poison', chance:100 },
+                  desc:'Badly poisons the target.' },
+  AuroraBeam:   { name:'Aurora Beam',   type:'Ice',      category:'special',  power:65,  accuracy:100, pp:20, maxPp:20,
+                  stageEffect:{ target:'opp', stat:'atk', stages:-1 }, desc:"Lowers opponent's Attack." },
+  AcidArmor:    { name:'Acid Armor',    type:'Poison',   category:'status',   power:0,   accuracy:100, pp:20, maxPp:20,
+                  stageEffect:{ target:'self', stat:'def', stages:2 }, desc:'Sharply raises Defense by 2.' },
+  DragonBreath: { name:'DragonBreath',  type:'Dragon',   category:'special',  power:60,  accuracy:100, pp:20, maxPp:20,
+                  statusEffect:{ target:'opp', status:'paralysis', chance:30 } },
+  Flamethrower2:{ name:'Fire Blast',    type:'Fire',     category:'special',  power:110, accuracy:85,  pp:5,  maxPp:5,
+                  statusEffect:{ target:'opp', status:'burn', chance:10 }, desc:'Powerful fire. May burn.' },
 };
 
 function cloneMove(m) { return { ...m }; }
@@ -321,6 +346,10 @@ function applyStatus(target, status) {
   const word = { burn:'burned', poison:'poisoned', paralysis:'paralyzed', sleep:'fell asleep', freeze:'frozen solid' }[status];
   log(`${target.name} was ${word}!`, 'log-status');
   sfxStatus();
+  // Track unique statuses for achievement
+  const t = GS.trainer;
+  if (!Array.isArray(t.statusesApplied)) t.statusesApplied = [];
+  if (!t.statusesApplied.includes(status)) t.statusesApplied.push(status);
   rerender();
   return true;
 }
@@ -404,6 +433,9 @@ function advanceTerrain(battle) {
     battle.terrain = next;
     sfxTerrain();
     log(`The terrain shifted to ${next}! ${TERRAIN_INFO[next]?.emoji || ''}`, 'log-terrain');
+    // Track terrain for achievement
+    if (!Array.isArray(GS.trainer.terrainsExplored)) GS.trainer.terrainsExplored = [];
+    if (next !== 'Neutral' && !GS.trainer.terrainsExplored.includes(next)) GS.trainer.terrainsExplored.push(next);
     rerender();
     return true;
   }
@@ -423,6 +455,35 @@ function applyTerrainSpecialOnHit(battle, move, defender) {
   }
 }
 
+// ─── WEATHER SYSTEM ─────────────────────────────────────────────
+const WEATHER_INFO = {
+  None:      { emoji:'☀️',  label:'Clear',      desc:'Normal conditions.',                   color:'transparent' },
+  Sunny:     { emoji:'🌞',  label:'Sunny',       desc:'Fire ×2, Water ×0.5.',                color:'rgba(255,200,20,0.13)' },
+  Rain:      { emoji:'🌧️', label:'Rain',        desc:'Water ×2, Fire ×0.5.',                color:'rgba(30,80,200,0.18)' },
+  Sandstorm: { emoji:'🌪️', label:'Sandstorm',   desc:'1/16 chip to non-Rock/Ground/Steel.', color:'rgba(180,120,20,0.20)' },
+  Hail:      { emoji:'❄️',  label:'Hail',        desc:'1/16 chip to non-Ice types.',         color:'rgba(100,200,240,0.15)' },
+};
+window.WEATHER_INFO = WEATHER_INFO;
+
+function getWeatherBoost(moveType, weather) {
+  if (!weather || weather === 'None') return 1;
+  if (weather === 'Sunny') { if (moveType==='Fire') return 2; if (moveType==='Water') return 0.5; }
+  if (weather === 'Rain')  { if (moveType==='Water') return 2; if (moveType==='Fire') return 0.5; }
+  return 1;
+}
+
+function setWeather(battle, weather) {
+  if (!battle) return;
+  battle.weather      = weather;
+  battle.weatherTurns = 5;
+  const info = WEATHER_INFO[weather] || {};
+  log(`${info.emoji} ${info.label} weather started! Lasts 5 turns.`, 'log-terrain');
+  // Track weather for achievement
+  if (!Array.isArray(GS.trainer.weatherSeen)) GS.trainer.weatherSeen = [];
+  if (!GS.trainer.weatherSeen.includes(weather)) GS.trainer.weatherSeen.push(weather);
+  rerender();
+}
+
 // ─── MOMENTUM METER ─────────────────────────────────────────────
 // 0 = full opponent surge | 50 = neutral | 100 = full player surge
 function updateMomentum(battle, multiplier, isPlayer) {
@@ -440,6 +501,7 @@ function updateMomentum(battle, multiplier, isPlayer) {
 
   if (battle.playerSurge && !wasPlayerSurge) {
     sfxSurge();
+    GS.trainer.surgeCount = (GS.trainer.surgeCount || 0) + 1;
     log('⚡ SURGE! Your momentum is overwhelming! (+25% damage)', 'log-surge');
   } else if (battle.oppSurge && !wasOppSurge) {
     log('💢 Opponent surging! Hold on!', 'log-surge');
@@ -486,6 +548,9 @@ async function checkAndApplyCombo(battle, moveType) {
   c.meter = Math.min(3, c.meter + 1);
   sfxCombo();
   log(`✨ ${combo.name}! ${combo.desc}`, 'log-combo');
+  // Track unique combos for achievement
+  if (!Array.isArray(GS.trainer.combosTriggered)) GS.trainer.combosTriggered = [];
+  if (!GS.trainer.combosTriggered.includes(combo.name)) GS.trainer.combosTriggered.push(combo.name);
 
   const opp      = battle.opponentPoke;
   const oppStages = battle.oppStages || {};
@@ -639,6 +704,41 @@ const WILD_TEMPLATES = [
   { name:'Geodude',   type:'Rock',     spriteId:74,  moveDefs:[MOVES.RockThrow, MOVES.Headbutt, MOVES.Harden],                           hp:40, atk:16, def:18, spd:6,  spa:10, spDef:12 },
 ];
 
+// ─── EVOLUTION TABLE (keyed by spriteId) ────────────────────────
+// Stats are game-scale (HP full value, others ÷4 of PokéAPI base stats)
+const EVOLUTION_TABLE = {
+  1:   { minLevel:16, evolvesTo:[{spriteId:2,   name:'Ivysaur',    type:'Grass',    hp:60,  atk:15, def:16, spd:13, spa:16, spDef:16}] },
+  2:   { minLevel:32, evolvesTo:[{spriteId:3,   name:'Venusaur',   type:'Grass',    hp:80,  atk:19, def:20, spd:17, spa:22, spDef:20}] },
+  4:   { minLevel:16, evolvesTo:[{spriteId:5,   name:'Charmeleon', type:'Fire',     hp:58,  atk:18, def:12, spd:18, spa:17, spDef:14}] },
+  5:   { minLevel:36, evolvesTo:[{spriteId:6,   name:'Charizard',  type:'Fire',     hp:78,  atk:22, def:17, spd:24, spa:22, spDef:18}] },
+  7:   { minLevel:16, evolvesTo:[{spriteId:8,   name:'Wartortle',  type:'Water',    hp:59,  atk:15, def:18, spd:14, spa:16, spDef:18}] },
+  8:   { minLevel:36, evolvesTo:[{spriteId:9,   name:'Blastoise',  type:'Water',    hp:79,  atk:19, def:22, spd:18, spa:18, spDef:22}] },
+  10:  { minLevel:7,  evolvesTo:[{spriteId:11,  name:'Metapod',    type:'Bug',      hp:50,  atk:7,  def:20, spd:7,  spa:7,  spDef:8 }] },
+  19:  { minLevel:20, evolvesTo:[{spriteId:20,  name:'Raticate',   type:'Normal',   hp:55,  atk:20, def:14, spd:24, spa:14, spDef:14}] },
+  21:  { minLevel:20, evolvesTo:[{spriteId:22,  name:'Fearow',     type:'Flying',   hp:65,  atk:24, def:17, spd:21, spa:17, spDef:17}] },
+  25:  { minLevel:22, evolvesTo:[{spriteId:26,  name:'Raichu',     type:'Electric', hp:60,  atk:22, def:14, spd:27, spa:22, spDef:16}] },
+  39:  { minLevel:36, evolvesTo:[{spriteId:40,  name:'Wigglytuff', type:'Normal',   hp:140, atk:17, def:14, spd:11, spa:17, spDef:14}] },
+  41:  { minLevel:22, evolvesTo:[{spriteId:42,  name:'Golbat',     type:'Flying',   hp:75,  atk:20, def:17, spd:21, spa:20, spDef:20}] },
+  43:  { minLevel:21, evolvesTo:[{spriteId:44,  name:'Gloom',      type:'Grass',    hp:60,  atk:17, def:17, spd:11, spa:17, spDef:17}] },
+  50:  { minLevel:26, evolvesTo:[{spriteId:51,  name:'Dugtrio',    type:'Ground',   hp:35,  atk:24, def:15, spd:35, spa:16, spDef:15}] },
+  52:  { minLevel:28, evolvesTo:[{spriteId:53,  name:'Persian',    type:'Normal',   hp:65,  atk:18, def:14, spd:24, spa:17, spDef:14}] },
+  54:  { minLevel:33, evolvesTo:[{spriteId:55,  name:'Golduck',    type:'Water',    hp:80,  atk:20, def:17, spd:20, spa:25, spDef:19}] },
+  58:  { minLevel:50, evolvesTo:[{spriteId:59,  name:'Arcanine',   type:'Fire',     hp:90,  atk:28, def:20, spd:27, spa:26, spDef:21}] },
+  60:  { minLevel:25, evolvesTo:[{spriteId:61,  name:'Poliwhirl',  type:'Water',    hp:65,  atk:18, def:18, spd:20, spa:16, spDef:17}] },
+  63:  { minLevel:16, evolvesTo:[{spriteId:64,  name:'Kadabra',    type:'Psychic',  hp:40,  atk:10, def:8,  spd:24, spa:33, spDef:15}] },
+  66:  { minLevel:28, evolvesTo:[{spriteId:67,  name:'Machoke',    type:'Fighting', hp:80,  atk:26, def:20, spd:13, spa:16, spDef:17}] },
+  69:  { minLevel:21, evolvesTo:[{spriteId:70,  name:'Weepinbell', type:'Grass',    hp:65,  atk:22, def:9,  spd:13, spa:21, spDef:9 }] },
+  74:  { minLevel:25, evolvesTo:[{spriteId:75,  name:'Graveler',   type:'Rock',     hp:55,  atk:24, def:26, spd:9,  spa:16, spDef:17}] },
+  92:  { minLevel:25, evolvesTo:[{spriteId:93,  name:'Haunter',    type:'Ghost',    hp:45,  atk:14, def:8,  spd:21, spa:28, spDef:9 }] },
+  129: { minLevel:20, evolvesTo:[{spriteId:130, name:'Gyarados',   type:'Water',    hp:95,  atk:33, def:17, spd:20, spa:22, spDef:25}] },
+  133: { minLevel:36, evolvesTo:[
+    {spriteId:134, name:'Vaporeon', type:'Water',    hp:130, atk:17, def:18, spd:17, spa:28, spDef:26},
+    {spriteId:135, name:'Jolteon',  type:'Electric', hp:65,  atk:20, def:14, spd:33, spa:26, spDef:25},
+    {spriteId:136, name:'Flareon',  type:'Fire',     hp:65,  atk:33, def:17, spd:17, spa:25, spDef:27},
+  ]},
+  16:  { minLevel:18, evolvesTo:[{spriteId:17,  name:'Pidgeotto',  type:'Flying',   hp:63,  atk:17, def:15, spd:18, spa:16, spDef:15}] },
+};
+
 let wildIdCounter = 1000;
 
 function spawnWildPoke(avgLevel) {
@@ -675,11 +775,82 @@ function computeRank(wins) {
 }
 
 // ─── GLOBAL GAME STATE ──────────────────────────────────────────
+// ─── ACHIEVEMENT DEFINITIONS ────────────────────────────────────
+const ACHIEVEMENTS = [
+  { id:'first_win',     label:'First Win',        emoji:'🏆', desc:'Win your first battle' },
+  { id:'first_catch',   label:'First Catch',       emoji:'🔵', desc:'Catch your first wild Pokémon' },
+  { id:'level_10',      label:'Rising Star',       emoji:'⭐', desc:'Reach Lv.10 with any Pokémon' },
+  { id:'level_20',      label:'Power Trainer',     emoji:'🌟', desc:'Reach Lv.20 with any Pokémon' },
+  { id:'level_30',      label:'Elite Trainer',     emoji:'💫', desc:'Reach Lv.30 with any Pokémon' },
+  { id:'first_evo',     label:'First Evolution',   emoji:'🧬', desc:'Trigger a Pokémon evolution' },
+  { id:'full_team',     label:'Full Roster',       emoji:'👥', desc:'Have 6+ Pokémon in your roster' },
+  { id:'collector',     label:'Collector',         emoji:'📦', desc:'Have 10+ Pokémon in your roster' },
+  { id:'streak_5',      label:'Hot Streak',        emoji:'🔥', desc:'Win 5 battles in a row' },
+  { id:'streak_10',     label:'Unstoppable',       emoji:'💎', desc:'Win 10 battles in a row' },
+  { id:'win_25',        label:'Veteran',           emoji:'🎖️', desc:'Win 25 battles total' },
+  { id:'win_50',        label:'Champion',          emoji:'👑', desc:'Win 50 battles total' },
+  { id:'rich',          label:'Money Bags',        emoji:'💰', desc:'Accumulate 5000 coins' },
+  { id:'status_master', label:'Status Master',     emoji:'☣️', desc:'Apply all 5 status conditions' },
+  { id:'perfect',       label:'Untouchable',       emoji:'🛡️', desc:'Win a battle without taking damage' },
+  { id:'terrain_all',   label:'Terrain Explorer',  emoji:'🌍', desc:'Experience all 5 terrain types' },
+  { id:'surge_10',      label:'Surge Master',      emoji:'⚡', desc:'Activate Surge 10 times' },
+  { id:'combo_all',     label:'Combo Legend',      emoji:'✨', desc:'Trigger all 5 combo types' },
+  { id:'weather_all',   label:'Weather Watcher',   emoji:'🌈', desc:'Experience all 4 weather types' },
+  { id:'magikarp',      label:'Splash! Nothing…',  emoji:'🐟', desc:'Win a battle using only Magikarp' },
+];
+window.ACHIEVEMENTS = ACHIEVEMENTS;
+
+function checkAchievements() {
+  const t  = GS.trainer;
+  if (!Array.isArray(t.unlockedAchievements)) t.unlockedAchievements = [];
+  const got = id => t.unlockedAchievements.includes(id);
+  const unlock = id => {
+    if (got(id)) return;
+    t.unlockedAchievements.push(id);
+    const ach = ACHIEVEMENTS.find(a => a.id === id);
+    if (ach) {
+      log(`${ach.emoji} Achievement unlocked: ${ach.label}!`, 'log-win');
+      showToast(`${ach.emoji} ${ach.label} unlocked!`);
+    }
+  };
+  if (t.wins >= 1)  unlock('first_win');
+  if ((t.catches||0) >= 1) unlock('first_catch');
+  if (GS.roster.some(p=>p.level>=10))  unlock('level_10');
+  if (GS.roster.some(p=>p.level>=20))  unlock('level_20');
+  if (GS.roster.some(p=>p.level>=30))  unlock('level_30');
+  if ((t.evolutions||0) >= 1)          unlock('first_evo');
+  if (GS.roster.length >= 6)           unlock('full_team');
+  if (GS.roster.length >= 10)          unlock('collector');
+  if ((t.winStreak||0) >= 5)           unlock('streak_5');
+  if ((t.winStreak||0) >= 10)          unlock('streak_10');
+  if (t.wins >= 25)                    unlock('win_25');
+  if (t.wins >= 50)                    unlock('win_50');
+  if (t.money >= 5000)                 unlock('rich');
+  if ((t.statusesApplied||[]).length >= 5) unlock('status_master');
+  if ((t.perfectBattles||0) >= 1)      unlock('perfect');
+  if ((t.terrainsExplored||[]).length >= 5) unlock('terrain_all');
+  if ((t.surgeCount||0) >= 10)         unlock('surge_10');
+  if ((t.combosTriggered||[]).length >= 5)  unlock('combo_all');
+  if ((t.weatherSeen||[]).length >= 4)      unlock('weather_all');
+}
+
 window.GAME_STATE = {
   trainer: {
     money:500, wins:0, losses:0, rank:'Rookie',
     pokeBalls:5, potions:3, superPotions:1, revives:1,
-    difficulty: 1, // 0=Easy 1=Normal 2=Hard
+    difficulty: 1,
+    winStreak: 0,
+    catches: 0,
+    evolutions: 0,
+    perfectBattles: 0,
+    surgeCount: 0,
+    unlockedAchievements: [],
+    statusesApplied: [],
+    terrainsExplored: [],
+    combosTriggered: [],
+    weatherSeen: [],
+    trainerName: 'Trainer',
+    avatar: '🧢',
   },
   roster:  [],
   battle:  null,
@@ -698,8 +869,10 @@ window.GAME_STATE = {
     healingOverlay:    false,
     catchOverlay:      { show:false, text:'', wiggle:false },
     pendingConfirmId:  null,
+    pendingEvolution:  null,
     movePanel:         false,
     searchQuery:       '',
+    screen:            'main',  // 'main' | 'team-builder' | 'trainer-card'
   },
 };
 
@@ -767,8 +940,11 @@ async function showWildBanner(name) {
 async function startRandomEncounter() {
   if (GS.battle) return;
   sfxMenu();
-  const player = firstLivePoke();
-  if (!player) { showToast('All Pokémon fainted! Visit the Healing Station.'); return; }
+  const living = GS.roster.filter(p => !p.fainted && p.hp > 0);
+  if (!living.length) { showToast('All Pokémon fainted! Visit the Healing Station.'); return; }
+  // Use team builder if roster has 3+ Pokémon; otherwise quick-start
+  if (living.length >= 3) { openTeamBuilder(); return; }
+  const player = living[0];
 
   const wild = spawnWildPoke(avgTeamLevel());
   GS.battle = {
@@ -782,10 +958,16 @@ async function startRandomEncounter() {
     oppStages:       emptyStages(),
     terrain:         'Neutral',
     terrainTurns:    0,
+    weather:         'None',
+    weatherTurns:    0,
     momentum:        50,
     playerSurge:     false,
     oppSurge:        false,
     combo:           emptyCombo(),
+    // 3v3 party
+    playerParty:     [],
+    oppParty:        [],
+    playerDmgThisBattle: 0,
   };
   GS.ui.sessionBattles++;
   rerender();
@@ -808,6 +990,12 @@ async function executeMove(attacker, defender, move, atkStages, defStages, isPla
   // Status move branch
   if (move.category === 'status') {
     spr?.classList.add(lungeClass); await delay(200); spr?.classList.remove(lungeClass);
+    // Weather-setting moves
+    if (move.weatherSet) {
+      setWeather(battle, move.weatherSet);
+      if (isPlayer) await checkAndApplyCombo(battle, move.type);
+      return false;
+    }
     // Accuracy
     const accMult = getStatMult(atkStages.acc||0) / getStatMult(defStages.eva||0);
     if (move.accuracy < 100 && Math.random() * 100 > move.accuracy * accMult) {
@@ -848,10 +1036,11 @@ async function executeMove(attacker, defender, move, atkStages, defStages, isPla
   if (bonusDmg) battle.combo.bonusDamage = 0;
 
   const terrainBoost  = getTerrainBoost(move.type, battle.terrain);
+  const weatherBoost  = getWeatherBoost(move.type, battle.weather || 'None');
   const momentumBoost = getMomentumBoost(battle, isPlayer);
 
   const r = resolveDamage(attacker, defender, move, atkStages, defStages,
-                          terrainBoost * momentumBoost, usingSynergy, battle.terrain);
+                          terrainBoost * weatherBoost * momentumBoost, usingSynergy, battle.terrain);
 
   if (r.missed) {
     log(`${attacker.name}'s attack missed!`); sfxHit(1); rerender(); return false;
@@ -874,6 +1063,8 @@ async function executeMove(attacker, defender, move, atkStages, defStages, isPla
 
   flashSprite(tgtSprId);
   defender.hp = Math.max(0, defender.hp - totalDmg);
+  // Track damage taken by player for perfect-battle achievement
+  if (!isPlayer && battle) battle.playerDmgThisBattle = (battle.playerDmgThisBattle || 0) + totalDmg;
 
   // Drain (LeechLife etc.)
   if (move.drain) {
@@ -972,9 +1163,35 @@ async function playerAttack(moveIdx) {
   }
 
   if (!battleEnded && GS.battle) {
+    // AI party switching: switch out if a better matchup exists in party
+    tryAIPartySwitch(GS.battle);
     await processEndOfTurnEffects(GS.battle);
     if (GS.battle) setWaiting(true);
   }
+}
+
+function tryAIPartySwitch(battle) {
+  if (!battle) return;
+  const oppParty = battle.oppParty || [];
+  if (!oppParty.length) return;
+  const opp = battle.opponentPoke;
+  const pl  = battle.playerPoke;
+  // Switch if current opp is weak (HP < 30%) and a better matchup exists
+  const oppHpRatio = opp.hp / opp.maxHp;
+  if (oppHpRatio > 0.3) return;
+  // Find a party member with a type advantage
+  const betterIdx = oppParty.findIndex(p => {
+    const mult = typeChart[p.type] ? (typeChart[p.type][pl.type] || 1) : 1;
+    return mult >= 1.5 && p.hp > 0;
+  });
+  const switchIdx = betterIdx >= 0 ? betterIdx : (oppParty.some(p => p.hp > 0) ? oppParty.findIndex(p => p.hp > 0) : -1);
+  if (switchIdx < 0) return;
+  const incoming = oppParty.splice(switchIdx, 1)[0];
+  oppParty.push(opp); // send current opp to back
+  battle.opponentPoke = incoming;
+  battle.oppStages    = emptyStages();
+  log(`Opponent switched to ${incoming.name}!`);
+  rerender();
 }
 
 async function processEndOfTurnEffects(battle) {
@@ -1003,6 +1220,35 @@ async function processEndOfTurnEffects(battle) {
     if (fainted) { await checkFaint(opp, pl, true); return; }
   }
 
+  // Weather chip damage + turn countdown
+  if (battle.weather && battle.weather !== 'None') {
+    battle.weatherTurns = (battle.weatherTurns || 0) - 1;
+    if (battle.weatherTurns <= 0) {
+      log('The weather cleared.', 'log-terrain');
+      battle.weather = 'None'; battle.weatherTurns = 0;
+      rerender();
+    } else {
+      const IMMUNE_SAND = ['Rock','Ground','Steel'];
+      for (const poke of [pl, opp]) {
+        if (poke.hp <= 0 || poke.fainted) continue;
+        let chip = 0;
+        if (battle.weather === 'Sandstorm' && !IMMUNE_SAND.includes(poke.type))
+          chip = Math.max(1, Math.floor(poke.maxHp / 16));
+        if (battle.weather === 'Hail' && poke.type !== 'Ice')
+          chip = Math.max(1, Math.floor(poke.maxHp / 16));
+        if (chip > 0) {
+          poke.hp = Math.max(0, poke.hp - chip);
+          const emoji = battle.weather === 'Sandstorm' ? '🌪️' : '❄️';
+          log(`${emoji} ${poke.name} is buffeted by the ${battle.weather.toLowerCase()}! (−${chip})`, 'log-terrain');
+          rerender();
+        }
+      }
+      // Faint checks after weather chip
+      if (pl.hp  <= 0) { await checkFaint(pl,  opp, false); return; }
+      if (opp.hp <= 0) { await checkFaint(opp, pl,  true);  return; }
+    }
+  }
+
   // Advance terrain counter
   advanceTerrain(battle);
 }
@@ -1023,13 +1269,26 @@ async function checkFaint(victim, other, victimIsOpponent) {
     const xpGain = victim.level * 8;
     log(`${other.name} earned ${xpGain} XP!`, 'log-level');
     await gainXP(other, xpGain);
+    // 3v3: try to send out next opp party member
+    const oppParty = GS.battle?.oppParty || [];
+    if (oppParty.length > 0) {
+      const nextOpp = oppParty.shift();
+      GS.battle.opponentPoke = nextOpp;
+      GS.battle.oppStages    = emptyStages();
+      log(`Opponent sent out ${nextOpp.name} (Lv.${nextOpp.level})!`);
+      rerender(); setWaiting(true); return false;
+    }
     await endBattle(true);
     return true;
   } else {
-    const next = GS.roster.find(p => !p.fainted && p.hp > 0 && p.id !== victim.id);
+    // 3v3: try party array first, then fall back to full roster
+    const playerParty = GS.battle?.playerParty || [];
+    let next = playerParty.length > 0 ? playerParty.shift() : null;
+    if (!next) next = GS.roster.find(p => !p.fainted && p.hp > 0 && p.id !== victim.id);
     if (!next) { log('All your Pokémon have fainted!', 'log-lose'); await endBattle(false); return true; }
     log(`${victim.name} can't fight! Go, ${next.name}!`);
-    GS.battle.playerPoke = next;
+    GS.battle.playerPoke    = next;
+    GS.battle.playerStages  = emptyStages();
     rerender(); setWaiting(true); return false;
   }
 }
@@ -1051,23 +1310,104 @@ async function gainXP(poke, amount) {
     const spr = document.getElementById('player-sprite');
     if (spr) { spr.classList.add('level-up-flash'); setTimeout(() => spr.classList.remove('level-up-flash'), 1200); }
     await sfxLevelUp(); rerender();
+    await checkEvolution(poke);
   }
   rerender();
 }
 
+// ─── EVOLUTION ───────────────────────────────────────────────────
+async function checkEvolution(poke) {
+  const evo = EVOLUTION_TABLE[poke.spriteId];
+  if (!evo || poke.level < evo.minLevel) return;
+  if (poke._evolvedThisSession) return; // prevent double-trigger mid-battle
+  if (evo.evolvesTo.length === 1) {
+    await triggerEvolution(poke, evo.evolvesTo[0]);
+  } else {
+    // Multi-evolution (e.g. Eevee) — show choice UI and wait
+    GS.ui.pendingEvolution = { poke, choices: evo.evolvesTo };
+    rerender();
+    // The player picks via chooseEvolution(); we pause here with a polling wait
+    await new Promise(resolve => {
+      const poll = setInterval(() => {
+        if (!GS.ui.pendingEvolution) { clearInterval(poll); resolve(); }
+      }, 200);
+    });
+  }
+}
+
+async function triggerEvolution(poke, evoChoice) {
+  poke._evolvedThisSession = true;
+  log(`✨ What?! ${poke.name} is evolving!`, 'log-level');
+  // Animate the player sprite if it's visible
+  const sprEl = document.getElementById('player-sprite');
+  if (sprEl) {
+    sprEl.classList.add('evolving-anim');
+    await delay(2600);
+    sprEl.classList.remove('evolving-anim');
+  } else {
+    await delay(800);
+  }
+  // Update Pokémon data
+  const prevName    = poke.name;
+  const hpFrac      = poke.maxHp > 0 ? poke.hp / poke.maxHp : 1;
+  poke.name         = evoChoice.name;
+  poke.type         = evoChoice.type;
+  poke.spriteId     = evoChoice.spriteId;
+  poke.baseHp       = evoChoice.hp;
+  poke.baseAtk      = evoChoice.atk;
+  poke.baseDef      = evoChoice.def;
+  poke.baseSpd      = evoChoice.spd;
+  poke.baseSpAtk    = evoChoice.spa;
+  poke.baseSpDef    = evoChoice.spDef;
+  const s = poke.level / 5;
+  poke.maxHp   = Math.max(5, Math.floor(poke.baseHp    * s));
+  poke.hp      = Math.max(1, Math.floor(poke.maxHp * hpFrac));
+  poke.attack  = Math.max(3, Math.floor(poke.baseAtk   * s));
+  poke.defense = Math.max(3, Math.floor(poke.baseDef   * s));
+  poke.speed   = Math.max(3, Math.floor(poke.baseSpd   * s));
+  poke.spAtk   = Math.max(3, Math.floor(poke.baseSpAtk * s));
+  poke.spDef   = Math.max(3, Math.floor(poke.baseSpDef * s));
+  GS.trainer.evolutions = (GS.trainer.evolutions || 0) + 1;
+  log(`🎉 ${prevName} evolved into ${poke.name}!`, 'log-level');
+  [600, 800, 1050].forEach((f, i) => setTimeout(() => playBeep(f, 180, 'triangle', 0.18), i * 200));
+  rerender();
+}
+
+async function chooseEvolution(evoChoice) {
+  const pending = GS.ui.pendingEvolution;
+  if (!pending) return;
+  GS.ui.pendingEvolution = null;
+  rerender();
+  await triggerEvolution(pending.poke, evoChoice);
+}
+
 async function endBattle(playerWon) {
   stopLowHpHeartbeat();
+  const b = GS.battle;
   if (playerWon) {
     GS.trainer.wins++;
+    GS.trainer.winStreak = (GS.trainer.winStreak || 0) + 1;
     GS.trainer.rank = computeRank(GS.trainer.wins);
     const coins = randInt(20, 80);
     GS.trainer.money += coins;
     log(`You won! 🏆 +${coins} coins`, 'log-win');
+    // Perfect battle: player took 0 damage
+    if (b && (b.playerDmgThisBattle || 0) === 0) {
+      GS.trainer.perfectBattles = (GS.trainer.perfectBattles || 0) + 1;
+    }
+    // Track terrain for achievement
+    if (b && b.terrain && b.terrain !== 'Neutral') {
+      const t = GS.trainer;
+      if (!Array.isArray(t.terrainsExplored)) t.terrainsExplored = [];
+      if (!t.terrainsExplored.includes(b.terrain)) t.terrainsExplored.push(b.terrain);
+    }
   } else {
     GS.trainer.losses++;
+    GS.trainer.winStreak = 0;
     GS.trainer.money = Math.max(0, GS.trainer.money - 50);
     log('You lost… 💸 −50 coins', 'log-lose');
   }
+  checkAchievements();
   GS.battle = null;
   GS.ui.movePanel = false;
   rerender(); autosave();
@@ -1147,6 +1487,7 @@ async function attemptCatch(opp, pl) {
     opp.id = GS.roster.length > 0 ? Math.max(...GS.roster.map(p => p.id)) + 1 : 100;
     GS.roster.push(opp);
     GS.ui.sessionCaught++;
+    GS.trainer.catches = (GS.trainer.catches || 0) + 1;
     GS.trainer.wins++;
     GS.trainer.rank = computeRank(GS.trainer.wins);
     await delay(2000);
@@ -1262,6 +1603,80 @@ function doRelease() {
   closeModal(); rerender();
 }
 
+// ─── SCREEN NAVIGATION ──────────────────────────────────────────
+function openTrainerCard() { sfxMenu(); GS.ui.screen = 'trainer-card'; rerender(); }
+function closeTrainerCard() { GS.ui.screen = 'main'; rerender(); }
+function setTrainerName(name) { GS.trainer.trainerName = name || 'Trainer'; rerender(); }
+function setAvatar(a) { GS.trainer.avatar = a; rerender(); }
+
+// ─── 3v3 TEAM BUILDER ───────────────────────────────────────────
+function openTeamBuilder() {
+  if (GS.battle) return;
+  sfxMenu();
+  const living = GS.roster.filter(p => !p.fainted && p.hp > 0);
+  if (!living.length) { showToast('All Pokémon fainted! Visit the Healing Station.'); return; }
+  GS.ui.teamBuilderSelected = [];
+  GS.ui.modal = 'team-builder';
+  rerender();
+}
+
+function toggleTeamSelect(pokeId) {
+  const sel = GS.ui.teamBuilderSelected || [];
+  const idx = sel.indexOf(pokeId);
+  if (idx >= 0) {
+    sel.splice(idx, 1);
+  } else {
+    if (sel.length >= 3) { showToast('Select exactly 3 Pokémon'); return; }
+    sel.push(pokeId);
+  }
+  GS.ui.teamBuilderSelected = sel;
+  rerender();
+}
+
+async function confirmTeam() {
+  const sel = GS.ui.teamBuilderSelected || [];
+  if (sel.length < 1) { showToast('Select at least 1 Pokémon!'); return; }
+  const party = sel.map(id => GS.roster.find(p => p.id === id)).filter(Boolean);
+  closeModal();
+  await startBattleWithParty(party);
+}
+
+async function startBattleWithParty(party) {
+  sfxMenu();
+  const player = party[0];
+  const avgLvl = Math.round(party.reduce((s, p) => s + p.level, 0) / party.length);
+  // Generate AI party of same size (max 3)
+  const partySize = Math.min(party.length, 3);
+  const oppParty  = Array.from({ length: partySize }, () => spawnWildPoke(avgLvl));
+
+  GS.battle = {
+    opponentPoke:    oppParty[0],
+    playerPoke:      player,
+    active:          true,
+    isWild:          true,
+    waitingForInput: false,
+    playerStages:    emptyStages(),
+    oppStages:       emptyStages(),
+    terrain:         'Neutral',
+    terrainTurns:    0,
+    weather:         'None',
+    weatherTurns:    0,
+    momentum:        50,
+    playerSurge:     false,
+    oppSurge:        false,
+    combo:           emptyCombo(),
+    playerParty:     party.slice(1),          // remaining (already used lead is index 0)
+    oppParty:        oppParty.slice(1),
+    playerDmgThisBattle: 0,
+  };
+  GS.ui.sessionBattles++;
+  rerender();
+  await showWildBanner(oppParty[0].name);
+  log(`A wild ${oppParty[0].name} (Lv.${oppParty[0].level}) appeared!`);
+  log(`Go! ${player.name}! (${partySize}v${partySize})`);
+  setWaiting(true);
+}
+
 // ─── DIFFICULTY ─────────────────────────────────────────────────
 function setDifficulty(val) {
   GS.trainer.difficulty = Number(val);
@@ -1339,8 +1754,20 @@ function load() {
     if (!raw) { showToast('No save file found!'); return; }
     const data  = JSON.parse(raw);
     GS.trainer  = data.trainer;
-    // Ensure new fields exist after loading older saves
-    GS.trainer.difficulty = GS.trainer.difficulty ?? 1;
+    // Ensure all new fields exist after loading older saves
+    GS.trainer.difficulty          = GS.trainer.difficulty          ?? 1;
+    GS.trainer.winStreak           = GS.trainer.winStreak           ?? 0;
+    GS.trainer.catches             = GS.trainer.catches             ?? 0;
+    GS.trainer.evolutions          = GS.trainer.evolutions          ?? 0;
+    GS.trainer.perfectBattles      = GS.trainer.perfectBattles      ?? 0;
+    GS.trainer.surgeCount          = GS.trainer.surgeCount          ?? 0;
+    GS.trainer.unlockedAchievements= GS.trainer.unlockedAchievements?? [];
+    GS.trainer.statusesApplied     = GS.trainer.statusesApplied     ?? [];
+    GS.trainer.terrainsExplored    = GS.trainer.terrainsExplored    ?? [];
+    GS.trainer.combosTriggered     = GS.trainer.combosTriggered     ?? [];
+    GS.trainer.weatherSeen         = GS.trainer.weatherSeen         ?? [];
+    GS.trainer.trainerName         = GS.trainer.trainerName         ?? 'Trainer';
+    GS.trainer.avatar              = GS.trainer.avatar              ?? '🧢';
     GS.roster   = data.roster.map(p => ({
       spAtk: p.attack, spDef: p.defense, baseSpAtk: p.baseAtk, baseSpDef: p.baseDef,
       status: null, statusTurns: 0,
